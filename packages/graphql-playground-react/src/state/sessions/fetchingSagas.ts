@@ -1,8 +1,6 @@
 import { ApolloLink, execute } from 'apollo-link'
 import { parseHeaders } from '../../components/Playground/util/parseHeaders'
-import { SubscriptionClient } from 'subscriptions-transport-ws'
-import { HttpLink } from 'apollo-link-http'
-import { WebSocketLink } from 'apollo-link-ws'
+import WebSocketLink  from './WebSocketLink'
 import { isSubscription } from '../../components/Playground/util/hasSubscription'
 import {
   takeLatest,
@@ -59,39 +57,18 @@ export interface Headers {
 export const defaultLinkCreator = (
   session: LinkCreatorProps,
   subscriptionEndpoint?: string,
-): { link: ApolloLink; subscriptionClient?: SubscriptionClient } => {
-  let connectionParams = {}
-  const { headers, credentials } = session
+): { link: ApolloLink } => {
+    const link = new WebSocketLink({
+      url: session.endpoint,
+      connectionParams: () => {
+        if (!session) {
+          return {};
+        }
+        return session.headers;
+      },
+    });
 
-  if (headers) {
-    connectionParams = { ...headers }
-  }
-
-  const httpLink = new HttpLink({
-    uri: session.endpoint,
-    headers,
-    credentials,
-  })
-
-  if (!subscriptionEndpoint) {
-    return { link: httpLink }
-  }
-
-  const subscriptionClient = new SubscriptionClient(subscriptionEndpoint, {
-    timeout: 20000,
-    lazy: true,
-    connectionParams,
-  })
-
-  const webSocketLink = new WebSocketLink(subscriptionClient)
-  return {
-    link: ApolloLink.split(
-      operation => isSubscription(operation),
-      webSocketLink as any,
-      httpLink,
-    ),
-    subscriptionClient,
-  }
+    return {link};
 }
 
 let linkCreator = defaultLinkCreator
@@ -136,23 +113,12 @@ function* runQuerySaga(action) {
     credentials: settings['request.credentials'],
   }
 
-  const { link, subscriptionClient } = linkCreator(lol, subscriptionEndpoint)
+  const { link } = linkCreator(lol, subscriptionEndpoint)
   yield put(setCurrentQueryStartTime(new Date()))
 
   let firstResponse = false
   const channel = eventChannel(emitter => {
     let closed = false
-    if (subscriptionClient && operationIsSubscription) {
-      subscriptionClient.onDisconnected(() => {
-        closed = true
-        emitter({
-          error: new Error(
-            `Could not connect to websocket endpoint ${subscriptionEndpoint}. Please check if the endpoint url is correct.`,
-          ),
-        })
-        emitter(END)
-      })
-    }
     const subscription = execute(link, operation).subscribe({
       next: function(value) {
         emitter({ value })
